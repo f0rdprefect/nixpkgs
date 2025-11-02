@@ -4,7 +4,7 @@
   fetchFromGitHub,
   cups,
   cups-filters,
-  foomatic-db-engine,
+  foomatic-db-engine-4,
   ghostscript,
   libpng,
   libxml2,
@@ -33,7 +33,7 @@ stdenv.mkDerivation rec {
   ];
   nativeBuildInputs = [
     autoreconfHook
-    foomatic-db-engine
+    foomatic-db-engine-4
     patchPpdFilesHook
     (perl.withPackages (pp: with pp; [ XMLLibXML ]))
   ];
