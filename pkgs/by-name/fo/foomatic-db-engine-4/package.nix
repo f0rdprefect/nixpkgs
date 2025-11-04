@@ -1,22 +1,25 @@
 {
   lib,
-  stdenv,
-  fetchFromGitHub,
-  perl,
   perlPackages,
-  libxml2,
-  pkg-config,
-  bash,
-  foomatic-db,
-  makeWrapper,
+  fetchFromGitHub,
+  withCupsAccess ? false, # needed to access local cups server
+  cups,
+  cups-filters,
+  curl,
+  withSocketAccess ? false, # needed to access network printers
+  netcat-gnu,
+  withSMBAccess ? false, # needed to access SMB-connected printers
+  samba,
   autoconf,
   automake,
   file,
+  makeWrapper,
+libxml2,
 }:
 
-stdenv.mkDerivation rec {
+perlPackages.buildPerlPackage rec {
   pname = "foomatic-db-engine";
-  version = "4.0.13";
+  version = "4.0.13-master";
 
   src = fetchFromGitHub {
     owner = "OpenPrinting";
@@ -27,30 +30,48 @@ stdenv.mkDerivation rec {
     hash = "sha256-egX+cqwE0YQgsI3ADzpzjd9FhBF8N/Hg6a9rsEabo7g=";
   };
 
+  #  src = fetchFromGitHub {
+  #    # there is also a daily snapshot at the `downloadPage`,
+  #    # but it gets deleted quickly and would provoke 404 errors
+  #    owner = "OpenPrinting";
+  #    repo = "foomatic-db-engine";
+  #    rev = "a2b12271e145fe3fd34c3560d276a57e928296cb";
+  #    hash = "sha256-qM12qtGotf9C0cjO9IkmzlW9GWCkT2Um+6dU3mZm3DU=";
+  #  };
+
+  outputs = [ "out" ];
+
+  propagatedBuildInputs = [
+    perlPackages.Clone
+    perlPackages.DBI
+    perlPackages.XMLLibXML
+  ];
+
+  buildInputs = [
+    curl
+    libxml2
+  ]
+  # provide some "cups-*" commands to `foomatic-{configure,printjob}`
+  # so that they can manage a local cups server (add queues, add jobs...)
+  ++ lib.optionals withCupsAccess [
+    cups
+    cups-filters
+  ]
+  # the commands `foomatic-{configure,getpjloptions}` need
+  # netcat if they are used to query or alter a network
+  # printer via AppSocket/HP JetDirect protocol
+  ++ lib.optional withSocketAccess netcat-gnu
+  # `foomatic-configure` can be used to access printers that are
+  # shared via the SMB protocol, but it needs the `smbclient` binary
+  ++ lib.optional withSMBAccess samba;
+
   nativeBuildInputs = [
     autoconf
     automake
-    pkg-config
-    perl
     file
     makeWrapper
   ];
 
-  buildInputs = [
-    libxml2
-    perl
-    bash
-  ]
-  ++ (with perlPackages; [
-    XMLLibXML
-    DBI
-  ]);
-
-  propagatedBuildInputs = [
-    foomatic-db
-  ];
-
-  # Make the file utility available during configure
   # sed-substitute indirection is more robust against
   # characters in paths that might need escaping
   prePatch = ''
@@ -60,74 +81,38 @@ stdenv.mkDerivation rec {
   '';
 
   preConfigure = ''
-    # Generate configure script
     ./make_configure
-
-    # Make sure Perl can find modules during build
-    export PERL5LIB="${
-      lib.makeSearchPath "lib/perl5/site_perl" (
-        with perlPackages;
-        [
-          XMLLibXML
-          DBI
-        ]
-      )
-    }:$PERL5LIB"
   '';
 
   configureFlags = [
     "--sysconfdir=${placeholder "out"}/etc"
-    "--localstatedir=/var"
     "LIBDIR=${placeholder "out"}/share/foomatic"
     "PERLPREFIX=${placeholder "out"}"
   ];
 
-  postInstall = ''
-    # Wrap perl scripts to ensure they can find runtime dependencies
-    for file in $out/bin/*; do
-      if [[ -f $file && -x $file ]]; then
-        wrapProgram $file \
-          --prefix PERL5LIB : "${
-            lib.makeSearchPath "lib/perl5/site_perl" (
-              with perlPackages;
-              [
-                XMLLibXML
-                DBI
-              ]
-            )
-          }" \
-          --prefix PATH : "${
-            lib.makeBinPath [
-              bash
-              file
-            ]
-          }" \
-          --set LIBDIR "${foomatic-db}/share/foomatic"
-      fi
+  postFixup = ''
+    for bin in "${placeholder "out"}/bin"/*; do
+      test '!' -L "$bin" || continue  # skip symlink
+      wrapProgram "$bin" --set PERL5LIB "$PERL5LIB"
     done
   '';
 
-  meta = with lib; {
-    description = "OpenPrinting printer support database engine (4.0.x series)";
+  doCheck = false; # no tests, would fail
+
+  meta = {
+    changelog = "https://github.com/OpenPrinting/foomatic-db-engine-4/blob/${src.rev}/ChangeLog.md";
+    description = "OpenPrinting printer support database engine";
+    downloadPage = "https://www.openprinting.org/download/foomatic/";
+    homepage = "https://openprinting.github.io/projects/02-foomatic/";
+    license = lib.licenses.gpl2Only;
+    maintainers = [  ];
     longDescription = ''
-      Foomatic's database engine generates PPD files from the data in
-      Foomatic's XML database. It also contains scripts to directly generate
-      print queues and handle jobs.
+      Foomatic's database engine generates PPD files
+      from the data in Foomatic's XML database.
+      It also contains scripts to directly
+      generate print queues and handle jobs.
 
-      This is the 4.0.x series which is needed for compatibility with certain
-      printer drivers like ptouch-driver, which generate incorrect PPD files
-      (with negative margin values) when using newer versions of
-      foomatic-db-engine.
-
-      This package should only be used when explicitly needed for compatibility
-      reasons. For most printers, the newer foomatic-db-engine package is
-      recommended.
+      Old 4.0.13 version which is needed for old xml to compile correctly.
     '';
-    homepage = "https://github.com/OpenPrinting/foomatic-db-engine-4";
-    license = licenses.gpl2Plus;
-    maintainers = with maintainers; [ ];
-    platforms = platforms.linux;
-    # Mark as lower priority than the main foomatic-db-engine to avoid conflicts
-    priority = 10;
   };
 }
